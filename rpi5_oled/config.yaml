@@ -1,5 +1,5 @@
 name: "RPi5 OLED Monitor"
-version: "1.0.5"
+version: "1.0.6"
 slug: rpi5_oled
 description: "Display system info on I2C OLED"
 url: "https://github.com/davidelolli/homeassistant-rpi5-oled"
@@ -7,7 +7,7 @@ arch:
   - aarch64
 devices:
   - /dev/i2c-0:rw
-privileged: true
+full_access: true
 startup: application
 boot: auto
 options: {}
