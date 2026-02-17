@@ -6,7 +6,8 @@
 
 Display system information on an I2C OLED screen connected to your Raspberry Pi 5 running Home Assistant OS.
 
-![RPi5 OLED Monitor](https://via.placeholder.com/600x200/1e88e5/ffffff?text=RPi5+OLED+Monitor)
+<img width="1376" height="768" alt="hf_20260217_220523_3726a7e3-6c1d-4beb-83b3-325dfc94506c" src="https://github.com/user-attachments/assets/068de92b-8591-407e-a66d-5130d1a50ed4" />
+
 
 ## ✨ Features
 
