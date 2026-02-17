@@ -1,15 +1,30 @@
 #!/usr/bin/env python3
 import psutil
 import time
-import smbus
+# Change imports to use smbus2 (compatible but cleaner)
+try:
+    from smbus2 import SMBus
+except ImportError:
+    try:
+        from smbus import SMBus
+    except ImportError:
+        print("Error: smbus2 or smbus not found")
+        exit(1)
+
 import os
+import subprocess
 from pathlib import Path
 
 class RPiSystemMonitor:
     def __init__(self):
         # Initialize I2C bus
-        self.bus = smbus.SMBus(0)  # Use I2C-0
-        self.i2c_address = 0x2D    # I2C slave address
+        try:
+            self.bus = SMBus(0)  # Use I2C-0
+            self.i2c_address = 0x2D    # I2C slave address
+        except Exception as e:
+            print(f"I2C Init Error: {e}")
+            self.bus = None
+            
         # Add NVME check timer
         self.last_nvme_check_time = 0
         self.nvme_error_status = False  # Cache the error check result
@@ -27,9 +42,14 @@ class RPiSystemMonitor:
     def get_temperature(self):
         """Get Jetson's temperature"""
         try:
-            with open("/sys/class/thermal/thermal_zone0/temp", "r") as f:
-                temp = float(f.read().strip()) / 1000
-            return temp
+            # Try multiple thermal zones common on RPi
+            zones = ["/sys/class/thermal/thermal_zone0/temp", "/sys/class/thermal/thermal_zone1/temp"]
+            for zone in zones:
+                if os.path.exists(zone):
+                    with open(zone, "r") as f:
+                        temp = float(f.read().strip()) / 1000
+                    return temp
+            return 0
         except:
             return 0
 
@@ -38,15 +58,11 @@ class RPiSystemMonitor:
         try:
             if not os.path.exists("/dev/nvme0n1"):
                 return None
-
-            # Read disk size from /sys/block/nvme0n1/size
-            # This gives number of sectors, each sector is 512 bytes
             with open("/sys/block/nvme0n1/size", "r") as f:
                 sectors = int(f.read().strip())
                 size_gb = round((sectors * 512) / (1024**3), 1)
             return size_gb
         except Exception as e:
-            print(f"Get NVME size error: {e}")
             return None
 
     def get_root_device(self):
@@ -59,23 +75,16 @@ class RPiSystemMonitor:
                         return device
             return None
         except Exception as e:
-            print(f"Get root device error: {e}")
             return None
 
     def get_storage_info(self):
         """Get storage information for root directory and NVME"""
         try:
-            # Get root directory information
             root_disk = psutil.disk_usage('/')
             root_total_gb = round(root_disk.total / (1024**3), 1)
             root_used_percent = root_disk.percent
-
-            # Check if root is on NVME
             root_device = self.get_root_device()
-
             is_root_nvme = root_device is not None and 'nvme' in root_device.lower()
-
-            # Get NVME physical size if exists
             nvme_size = self.get_nvme_size()
             nvme_info = (True, nvme_size) if nvme_size is not None else None
 
@@ -86,40 +95,41 @@ class RPiSystemMonitor:
                 'nvme_info': nvme_info
             }
         except Exception as e:
-            print(f"Storage info error: {e}")
             return None
 
     def send_to_oled(self, x, y, message):
         """Send data to OLED display"""
+        if not self.bus: return
         try:
-            # Build data packet: x coordinate, y coordinate, string content
             data = [x, y] + list(message.encode('ascii'))
             self.bus.write_i2c_block_data(self.i2c_address, 0x00, data)
-            time.sleep(0.01)  # Wait for data processing
+            time.sleep(0.01)
         except Exception as e:
             print(f"Send data error: {e}")
 
     def send_big_to_oled(self, x, y, message):
         """Send data to OLED display"""
+        if not self.bus: return
         try:
-            # Build data packet: x coordinate, y coordinate, string content
             data = [x, y] + list(message.encode('ascii'))
             self.bus.write_i2c_block_data(self.i2c_address, 0x01, data)
-            time.sleep(0.01)  # Wait for data processing
+            time.sleep(0.01)
         except Exception as e:
             print(f"Send data error: {e}")
 
     def send_progress_to_oled(self, y, progress):
         """Send data to OLED display"""
+        if not self.bus: return
         try:
             data = [0xFF, 0xF0, y, progress]
             self.bus.write_i2c_block_data(self.i2c_address, 0x00, data)
-            time.sleep(0.01)  # Wait for data processing
+            time.sleep(0.01)
         except Exception as e:
             print(f"Send progress error: {e}")
 
     def clear_screen(self):
         """Clear OLED screen"""
+        if not self.bus: return
         try:
             self.bus.write_i2c_block_data(self.i2c_address, 0x00, [0xFF, 0xFF])
             time.sleep(0.01)
@@ -131,118 +141,91 @@ class RPiSystemMonitor:
         try:
             if not os.path.exists("/dev/nvme0n1"):
                 return False
-
-            # Check system log for NVME errors
-            import subprocess
-            cmd = "dmesg | grep -i 'nvme' | grep -i 'error\\|warning' | tail -n 1"
+            cmd = "dmesg | grep -i 'nvme' | grep -i 'error\\\\|warning' | tail -n 1"
             result = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-
-            # If we found any error/warning messages in recent log
-            if result.stdout:
-                return True
-
-            # Additional check: read SMART data if available
+            if result.stdout: return True
             smart_cmd = "nvme smart-log /dev/nvme0n1"
             smart_result = subprocess.run(smart_cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             if smart_result.returncode == 0:
-                # Check for critical warnings in SMART data
                 if b"critical_warning" in smart_result.stdout and b": 0" not in smart_result.stdout:
                     return True
-
             return False
         except Exception as e:
-            print(f"Check NVME error status error: {e}")
             return False
 
     def send_nvme_status(self):
         """Send NVME status via I2C"""
+        if not self.bus: return
         try:
-            # Check if it's time to update NVME error status (every 60 seconds)
             current_time = time.time()
             if current_time - self.last_nvme_check_time >= 60:
                 self.nvme_error_status = self.check_nvme_error()
                 self.last_nvme_check_time = current_time
 
             if not os.path.exists("/dev/nvme0n1"):
-                # No NVME, send 0xFF, 0xFD
                 self.bus.write_i2c_block_data(self.i2c_address, 0x00, [0xFF, 0xFD])
             elif self.nvme_error_status:
-                # NVME exists but has errors/warnings, send 0xFF, 0xFB
                 self.bus.write_i2c_block_data(self.i2c_address, 0x00, [0xFF, 0xFB])
             else:
-                # NVME exists and no errors, send 0xFF, 0xFC
                 self.bus.write_i2c_block_data(self.i2c_address, 0x00, [0xFF, 0xFC])
-            time.sleep(0.01)  # Wait for data processing
+            time.sleep(0.01)
         except Exception as e:
             print(f"Send NVME status error: {e}")
 
     def check_shutdown_signal(self):
         """Check if shutdown signal is received via I2C"""
+        if not self.bus: return False
         try:
-            # Read one byte from I2C device with command 0xFF
             status = self.bus.read_byte_data(self.i2c_address, 0xFF)
             return status == 0
         except Exception as e:
-            print(f"Check shutdown signal error: {e}")
             return False
 
     def system_shutdown(self):
         """Perform system shutdown"""
+        if not self.bus: return
         try:
-            print("Shutdown signal received, sending confirmation...")
-            # Send clear screen and shutdown confirmation signal
+            print("Shutdown signal received...")
             self.bus.write_i2c_block_data(self.i2c_address, 0x00, [0xFF, 0xFF])
-            time.sleep(0.1)  # Wait a bit to ensure the signal is sent
+            time.sleep(0.1)
             self.bus.write_i2c_block_data(self.i2c_address, 0x00, [0xFF, 0xFE])
-            time.sleep(0.1)  # Wait a bit to ensure the signal is sent
-
+            time.sleep(0.1)
             print("System will shutdown now...")
-            import subprocess
-            subprocess.run(["shutdown", "-h", "now"])
+            subprocess.run(["poweroff"])
         except Exception as e:
             print(f"System shutdown error: {e}")
 
     def run(self):
         """Main running loop"""
-        display_cycle = 0  # Track current display content
-        cycle_start_time = time.time()  # Record current cycle start time
-        empty_line = " ".ljust(19)  # Empty line for clearing unused lines
+        display_cycle = 0
+        cycle_start_time = time.time()
+        empty_line = " ".ljust(19)
 
         while True:
             try:
-                # Check shutdown signal first
                 if self.check_shutdown_signal():
                     self.system_shutdown()
-                    break  # Exit the loop after initiating shutdown
+                    break
 
-                # Send NVME status first
                 self.send_nvme_status()
-
                 current_time = time.time()
-                # Switch display content based on cycle
+                
                 if display_cycle < 2:
-                    # First two cycles (CPU/Memory and Storage) show for 8 seconds
                     if current_time - cycle_start_time >= 8:
                         cycle_start_time = current_time
                         display_cycle = (display_cycle + 1) % 4
-                        if display_cycle != 0:
-                            self.clear_screen()
+                        if display_cycle != 0: self.clear_screen()
                 else:
-                    # Last two cycles (Temperature and Time) show for 5 seconds
                     if current_time - cycle_start_time >= 5:
                         cycle_start_time = current_time
                         display_cycle = (display_cycle + 1) % 4
-                        if display_cycle != 0:
-                            self.clear_screen()
+                        if display_cycle != 0: self.clear_screen()
 
                 if display_cycle == 0:
-                    # Display CPU and memory information
                     cpu_usage = self.get_cpu_usage()
                     mem_usage, mem_total = self.get_memory_info()
-
                     cpu_msg = f"CPU:{cpu_usage:.1f}%".ljust(19)
                     mem_msg = f"MEM:{mem_usage:.1f}% => {mem_total}G".ljust(19)
-
                     self.send_to_oled(0, 0, cpu_msg)
                     self.send_progress_to_oled(1, int(cpu_usage))
                     self.send_to_oled(0, 2, empty_line)
@@ -250,7 +233,6 @@ class RPiSystemMonitor:
                     self.send_progress_to_oled(4, int(mem_usage))
 
                 elif display_cycle == 1:
-                    # Display storage information
                     storage_info = self.get_storage_info()
                     if storage_info:
                         if storage_info['is_root_nvme']:
@@ -261,7 +243,6 @@ class RPiSystemMonitor:
                             sd_msg = f"SD:{storage_info['root_used_percent']:.1f}% => {storage_info['root_total_gb']}G".ljust(19)
                             self.send_to_oled(0, 1, sd_msg)
                             self.send_progress_to_oled(2, int(storage_info['root_used_percent']))
-
                             if storage_info['nvme_info']:
                                 exists, total_gb = storage_info['nvme_info']
                                 nvme_msg = f"NVME => {total_gb}G".ljust(19)
@@ -270,24 +251,19 @@ class RPiSystemMonitor:
                             self.send_to_oled(0, 4, nvme_msg)
 
                 elif display_cycle == 2:
-                    # Display temperature information
                     temperature = self.get_temperature()
-                    temp_msg = f"TEMP: {temperature:.1f}C".center(14)  # Center align for big font display
+                    temp_msg = f"TEMP: {temperature:.1f}C".center(14)
+                    self.send_big_to_oled(0, 2, temp_msg)
+                    self.send_big_to_oled(0, 2, temp_msg)
 
-                    self.send_big_to_oled(0, 2, temp_msg)  # Display in the middle of the screen
-                    self.send_big_to_oled(0, 2, temp_msg)  # 调整到屏幕中间位置显示
-
-                else:  # display_cycle == 3
-                    # Display system time
+                else:
                     current_datetime = time.localtime()
                     date_msg = time.strftime("  %Y/%m/%d", current_datetime).ljust(14)
                     time_msg = time.strftime("     %H:%M", current_datetime).ljust(14)
-
                     self.send_big_to_oled(0, 1, date_msg)
                     self.send_big_to_oled(0, 3, time_msg)
 
-                # Update interval
-                time.sleep(1)  # Reduce update interval for smoother display
+                time.sleep(1)
 
             except Exception as e:
                 print(f"Runtime error: {e}")
