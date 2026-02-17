@@ -1,0 +1,14 @@
+name: "RPi5 OLED Monitor"
+version: "1.0.0"
+slug: rpi5_oled
+description: "Display system info on I2C OLED"
+arch:
+  - aarch64
+devices:
+  - /dev/i2c-0
+privileged:
+  - SYS_RAWIO
+boot: auto
+startup: application
+options: {}
+schema: {}
