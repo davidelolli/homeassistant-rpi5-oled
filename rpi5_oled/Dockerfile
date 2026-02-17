@@ -1,16 +1,28 @@
-ARG BUILD_FROM
-FROM $BUILD_FROM
+FROM alpine:3.19
 
-# Install Python and required packages
-RUN apk add --no-cache python3 py3-pip i2c-tools
+# Install dependencies needed for smbus-cffi compilation
+RUN apk add --no-cache \
+    python3 \
+    py3-pip \
+    i2c-tools \
+    py3-psutil \
+    gcc \
+    musl-dev \
+    python3-dev \
+    linux-headers
 
-# Install Python packages
-RUN pip3 install --no-cache-dir psutil smbus-cffi
+# Install Python libraries
+RUN pip3 install --break-system-packages --no-cache-dir smbus-cffi
+
+# Setup working directory
+WORKDIR /app
 
 # Copy scripts
-COPY rpi5-oled.py /usr/local/bin/
-COPY shutdown.py /usr/local/bin/
-COPY run.sh /
-RUN chmod a+x /run.sh /usr/local/bin/rpi5-oled.py /usr/local/bin/shutdown.py
+COPY rpi5-oled.py .
+COPY shutdown.py .
 
-CMD [ "/run.sh" ]
+# Fix permissions just in case
+RUN chmod +x rpi5-oled.py shutdown.py
+
+# Run the main script directly
+CMD ["python3", "rpi5-oled.py"]
